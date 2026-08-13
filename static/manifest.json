@@ -1,0 +1,9 @@
+{
+  "name": "Audiobooks",
+  "short_name": "Audiobooks",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#101216",
+  "theme_color": "#101216",
+  "icons": [{ "src": "/static/icon.png", "sizes": "512x512", "type": "image/png" }]
+}

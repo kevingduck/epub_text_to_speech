@@ -1,0 +1,19 @@
+[project]
+name = "audiobooks"
+version = "0.1.0"
+description = "Personal EPUB-to-audiobook server (Kokoro TTS)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "kokoro>=0.9",
+    "soundfile>=0.12",
+    "ebooklib>=0.18",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pillow>=10.0",
+    "python-multipart>=0.0.9",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
