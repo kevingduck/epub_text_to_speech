@@ -1,4 +1,4 @@
-# epub_text_to_speech
+# EPUB Reader - Text to Speech for Audio Books
 
 Self-hosted EPUB → audiobook server. Upload a DRM-free EPUB from a web page;
 the server reads it aloud with [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M)
