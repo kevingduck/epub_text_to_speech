@@ -8,6 +8,8 @@ from pathlib import Path
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 from ebooklib import epub, ITEM_COVER, ITEM_DOCUMENT, ITEM_IMAGE
 
+from .normalize import roman_to_int
+
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 warnings.filterwarnings("ignore", category=UserWarning, module="ebooklib")
 warnings.filterwarnings("ignore", category=FutureWarning, module="ebooklib")
@@ -90,13 +92,66 @@ def _extract_text(soup: BeautifulSoup) -> str:
     return " ".join(body.get_text(" ").split())
 
 
+# Titles that are really file paths/URLs left over from a txt/PDF conversion.
+_JUNK_TITLE_RE = re.compile(r"://|^file:|\w\|/|\.(?:txt|html?|xhtml|pdf)$", re.I)
+
+
+def _clean_title(t: str | None) -> str | None:
+    if not t:
+        return None
+    t = " ".join(t.split())
+    return None if not t or _JUNK_TITLE_RE.search(t) else t
+
+
 def _doc_title(soup: BeautifulSoup) -> str | None:
     h = soup.find(["h1", "h2", "h3"])
-    if h:
-        t = " ".join(h.get_text(" ").split())
-        if t:
-            return t
-    return None
+    return _clean_title(h.get_text(" ")) if h else None
+
+
+# Standalone paragraphs like "42", "XIV.", "Chapter 7", "PART TWO" that mark
+# chapter starts inside a single-document book (typical of txt conversions).
+_MARKER_RE = re.compile(r"^(?:(?:chapter|part|book)\s+)?(\d{1,3}|[IVXLCDM]{1,7})\.?$", re.I)
+
+SPLIT_MIN_CHARS = 60_000   # only attempt marker-splitting on huge chapters
+SPLIT_MIN_GAP = 4_000      # denser markers than this are page numbers, not chapters
+
+
+def split_text_on_markers(text: str) -> list[tuple[str | None, str]] | None:
+    """Split one huge text on chapter-marker paragraphs. Returns
+    [(title_or_None, chunk_text)], or None when no credible structure exists."""
+    paras = text.split("\n\n")
+    marks: list[tuple[int, str]] = []
+    for i, p in enumerate(paras):
+        s = p.strip()
+        if not s or len(s) > 20:
+            continue
+        m = _MARKER_RE.match(s)
+        if not m:
+            continue
+        num = m.group(1)
+        if not num.isdigit() and roman_to_int(num.upper()) is None:
+            continue
+        title = f"Chapter {num}" if s.rstrip(".") == num else s.rstrip(".")
+        marks.append((i, title))
+
+    if not (3 <= len(marks) <= 400):
+        return None
+    gaps = [sum(len(p) for p in paras[a[0]:b[0]])
+            for a, b in zip(marks, marks[1:])]
+    gaps.sort()
+    if gaps[len(gaps) // 2] < SPLIT_MIN_GAP:
+        return None  # markers too dense: page numbers, not chapters
+
+    pieces: list[tuple[str | None, str]] = []
+    preamble = "\n\n".join(paras[: marks[0][0]]).strip()
+    if preamble:
+        pieces.append((None, preamble))
+    bounds = [i for i, _ in marks] + [len(paras)]
+    for (start, title), end in zip(marks, bounds[1:]):
+        chunk = "\n\n".join(paras[start + 1 : end]).strip()
+        if chunk:
+            pieces.append((title, chunk))
+    return pieces if len(pieces) >= 3 else None
 
 
 def _make_cover_jpeg(data: bytes) -> bytes | None:
@@ -159,7 +214,7 @@ def parse(epub_path: str | Path) -> ParsedBook:
         text = _extract_text(soup)
         chars = len(text)
         heading = _doc_title(soup)
-        toc_title = toc_titles.get(href) or toc_titles.get(Path(href).name)
+        toc_title = _clean_title(toc_titles.get(href) or toc_titles.get(Path(href).name))
         ch_title = heading or toc_title
 
         basename = Path(href).name
@@ -181,6 +236,24 @@ def parse(epub_path: str | Path) -> ParsedBook:
             name_hit and chars < NAME_EXCLUDE_MAX_CHARS
         )
         chapters.append(Chapter(len(chapters), ch_title, text, chars, included, href))
+
+    # Single-document books (txt/PDF conversions) put everything in one spine
+    # item; split huge chapters on internal "42" / "XIV" / "Chapter 7" marker
+    # paragraphs when a credible chapter structure exists.
+    expanded: list[Chapter] = []
+    for ch in chapters:
+        pieces = (split_text_on_markers(ch.text)
+                  if ch.included and ch.chars > SPLIT_MIN_CHARS else None)
+        if not pieces:
+            expanded.append(ch)
+            continue
+        for j, (p_title, p_text) in enumerate(pieces):
+            if j == 0 and p_title is None:
+                p_title = ch.title  # preamble keeps the original title, if any
+            expanded.append(Chapter(0, p_title, p_text, len(p_text), True, ch.href))
+    chapters = expanded
+    for i, ch in enumerate(chapters):
+        ch.idx = i
 
     # Number untitled content chapters separately from excluded scraps so the
     # player list starts at "Section 1".

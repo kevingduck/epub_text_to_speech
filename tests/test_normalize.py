@@ -147,3 +147,33 @@ def test_split_parts():
     assert sum(len(p) for p in parts) == 200          # no segment lost
     assert [s for p in parts for s in p] == segs      # order preserved
     assert split_parts([("short", True)], target=8000) == [[("short", True)]]
+
+
+# --- marker splitting (epub_parse) ---
+
+def test_split_text_on_markers():
+    from app.epub_parse import split_text_on_markers
+    body = ("Some prose here. " * 400).strip()  # ~6.8k chars per chapter
+    text = "Preamble text.\n\n" + "\n\n".join(f"{n}\n\n{body}" for n in range(1, 6))
+    pieces = split_text_on_markers(text)
+    assert pieces is not None
+    assert pieces[0] == (None, "Preamble text.")
+    assert [t for t, _ in pieces[1:]] == [f"Chapter {n}" for n in range(1, 6)]
+    assert all(body in c for _, c in pieces[1:])
+
+def test_split_rejects_dense_page_numbers():
+    from app.epub_parse import split_text_on_markers
+    body = ("word " * 300).strip()  # ~1.5k chars between markers = page numbers
+    text = "\n\n".join(f"{n}\n\n{body}" for n in range(1, 60))
+    assert split_text_on_markers(text) is None
+
+def test_split_requires_multiple_markers():
+    from app.epub_parse import split_text_on_markers
+    text = "42\n\n" + ("prose " * 20000)
+    assert split_text_on_markers(text) is None
+
+def test_junk_titles_rejected():
+    from app.epub_parse import _clean_title
+    assert _clean_title("file:///F|/rah/Simmons.txt") is None
+    assert _clean_title("chapter01.html") is None
+    assert _clean_title("A Real Title") == "A Real Title"
